@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TokenStatus {
+  TRACKING
+  DONE
+  FAILED
+}
+
+enum SafetyStatus {
+  PENDING
+  SCANNED
+  UNSCANNED
+}
+
+/// One row per token, created the first time it shows up on a trending list.
+model Token {
+  id            String    @id @default(cuid())
+  network       String
+  tokenAddress  String
+  poolAddress   String
+  symbol        String
+  name          String
+  dex           String?
+  trendRank     Int
+  poolCreatedAt DateTime?
+
+  entryAt        DateTime @default(now())
+  entryPrice     Float
+  entryFdv       Float?
+  entryLiquidity Float?
+  entryVolume24h Float?
+
+  status       TokenStatus @default(TRACKING)
+  nextCheckAt  DateTime
+  hoursTracked Int         @default(0)
+  errorCount   Int         @default(0)
+  lastError    String?
+
+  /// Hourly closes after entry, forward-filled. Index 0 = first full hour after entry.
+  closes Json?
+
+  ret1d             Float?
+  ret3d             Float?
+  ret7d             Float?
+  peakMultiple      Float?
+  hoursToPeak       Int?
+  drawdownAfterPeak Float?
+
+  /// Contract safety snapshot, taken within a few hours of entry.
+  safetyStatus  SafetyStatus @default(PENDING)
+  safetySource  String?
+  scannedAt     DateTime?
+  flagSell      Boolean?
+  flagOwner     Boolean?
+  flagLiquidity Boolean?
+  sellTax       Float?
+  lpLockedPct   Float?
+  safetyNotes   String[]     @default([])
+  safetyRaw     Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([network, tokenAddress])
+  @@index([status, nextCheckAt])
+  @@index([entryAt])
+  @@index([safetyStatus])
+}

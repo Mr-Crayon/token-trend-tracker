@@ -1,0 +1,22 @@
+# Vercel Hobby only allows daily cron jobs, so GitHub Actions triggers the tracker hourly.
+# Needs two repo secrets: TRACKER_URL (e.g. https://trend-tracker.vercel.app) and CRON_SECRET.
+name: tracker
+
+on:
+  schedule:
+    - cron: "7 * * * *" # every hour at :07 (UTC)
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Run tracker
+        env:
+          TRACKER_URL: ${{ secrets.TRACKER_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl --fail-with-body --silent --show-error --max-time 90 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${TRACKER_URL%/}/api/cron/run"
