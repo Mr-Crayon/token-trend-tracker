@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { SAFETY, networkScanner } from "@/lib/config";
+import { readLiquidity } from "@/lib/liquidity";
 
 /**
  * Contract safety snapshot, taken shortly after a coin is logged.
@@ -7,7 +8,7 @@ import { SAFETY, networkScanner } from "@/lib/config";
  * Three red flags:
  * - sell:      can't sell (honeypot, sell blocked, transfer restrictions) or sell tax >= SAFETY.maxSellTax
  * - owner:     the dev keeps powers over the token: mint, freeze, change taxes, blacklist/whitelist, pause, upgrade
- * - liquidity: less than SAFETY.minLockedLp of the LP is locked or burned
+ * - liquidity: less than SAFETY.minLockedLp of the LP is locked or burned (see readLiquidity)
  *
  * A flag is null when the scanner couldn't tell.
  */
@@ -104,28 +105,22 @@ export function assessGoPlus(t: GoPlusToken, dex: string | null): Assessment {
   notes.push(...ownerNotes);
   const ownerKnown = t.is_open_source !== undefined;
 
-  // Is the liquidity locked?
+  // Is the liquidity locked? Store the raw share; readLiquidity decides what it means.
   let lpLockedPct: number | null = null;
-  let flagLiquidity: boolean | null = null;
-  if (dex && (SAFETY.programHeldLiquidityDexes as readonly string[]).includes(dex)) {
-    flagLiquidity = false;
-    notes.push("Liquidity held by launchpad curve");
-  } else if (Array.isArray(t.lp_holders) && t.lp_holders.length > 0) {
-    lpLockedPct = t.lp_holders.reduce((sum, h) => {
+  if (Array.isArray(t.lp_holders) && t.lp_holders.length > 0) {
+    const locked = t.lp_holders.reduce((sum, h) => {
       const burned = BURN_ADDRESSES.has(String(h.address ?? "").toLowerCase());
       return burned || yes(h.is_locked) ? sum + (fraction(h.percent) ?? 0) : sum;
     }, 0);
-    lpLockedPct = Math.min(1, lpLockedPct);
-    flagLiquidity = lpLockedPct < SAFETY.minLockedLp;
-    if (flagLiquidity) notes.push(`Only ${Math.round(lpLockedPct * 100)}% of LP locked or burned`);
-  } else {
-    notes.push("LP lock unknown");
+    lpLockedPct = Math.min(1, locked);
   }
+  const liquidity = readLiquidity(dex, lpLockedPct);
+  if (liquidity.note) notes.push(liquidity.note);
 
   return {
     flagSell: sellKnown ? sellNotes.length > 0 : null,
     flagOwner: ownerKnown ? ownerNotes.length > 0 : null,
-    flagLiquidity,
+    flagLiquidity: liquidity.flag,
     sellTax,
     lpLockedPct,
     notes,
@@ -151,23 +146,17 @@ export function assessRugcheck(summary: RugcheckSummary, dex: string | null): As
   const ownerNotes = risks.filter((r) => SOLANA_OWNER_RISK.test(r));
   const notes = [...sellNotes, ...ownerNotes];
 
-  let lpLockedPct: number | null = null;
-  let flagLiquidity: boolean | null = null;
-  if (dex && (SAFETY.programHeldLiquidityDexes as readonly string[]).includes(dex)) {
-    flagLiquidity = false;
-    notes.push("Liquidity held by launchpad curve");
-  } else if (typeof summary.lpLockedPct === "number" && Number.isFinite(summary.lpLockedPct)) {
-    lpLockedPct = Math.min(1, Math.max(0, summary.lpLockedPct / 100));
-    flagLiquidity = lpLockedPct < SAFETY.minLockedLp;
-    if (flagLiquidity) notes.push(`Only ${Math.round(lpLockedPct * 100)}% of LP locked or burned`);
-  } else {
-    notes.push("LP lock unknown");
-  }
+  const lpLockedPct =
+    typeof summary.lpLockedPct === "number" && Number.isFinite(summary.lpLockedPct)
+      ? Math.min(1, Math.max(0, summary.lpLockedPct / 100))
+      : null;
+  const liquidity = readLiquidity(dex, lpLockedPct);
+  if (liquidity.note) notes.push(liquidity.note);
 
   return {
     flagSell: sellNotes.length > 0,
     flagOwner: ownerNotes.length > 0,
-    flagLiquidity,
+    flagLiquidity: liquidity.flag,
     sellTax: null,
     lpLockedPct,
     notes,

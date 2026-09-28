@@ -86,8 +86,16 @@ export const SIM_DEFAULTS = {
 export const SAFETY = {
   /** Sell tax at or above this counts as a sell risk. */
   maxSellTax: 0.1,
-  /** Less than this share of LP locked or burned counts as unlocked liquidity. */
-  minLockedLp: 0.9,
+  /**
+   * Less than this share of LP locked or burned counts as unlocked liquidity.
+   * Applied when the dashboard loads, so changing it re-grades coins already logged.
+   */
+  minLockedLp: 0.5,
+  /**
+   * Concentrated-liquidity pools hold liquidity as position NFTs, and the scanners
+   * don't reliably recognize NFT lockers, so lock status there counts as unknown.
+   */
+  concentratedLiquidityDex: /v3|v4|slipstream|clmm|dlmm|whirlpool/i,
   /** Only scan within this many hours of logging, so the result reflects what you'd have seen at entry. */
   maxScanDelayHours: 3,
   /**

@@ -46,7 +46,7 @@ Within 3 hours of logging a coin, the tracker checks its contract and records th
 
 - **Sell risk:** honeypot, can't sell the full balance, or a sell tax of 10% or more.
 - **Dev controls:** the creator can still mint, freeze, change taxes, blacklist or whitelist wallets, pause trading, or upgrade the contract. On EVM chains, owner-only powers are ignored when ownership is renounced.
-- **Unlocked liquidity:** under 90% of the LP is locked or burned. Coins still on a launchpad bonding curve count as locked, since the curve program holds the liquidity.
+- **Unlocked liquidity:** under 50% of the LP is locked or burned. Coins still on a launchpad bonding curve count as locked, since the curve program holds the liquidity. On concentrated-liquidity pools (Uniswap v3/v4, PancakeSwap v3, Aerodrome Slipstream, and similar), liquidity is held as position NFTs and the scanners don't recognize NFT lockers, so lock status there counts as unknown. The liquidity flag is worked out when the dashboard loads from the stored lock share, so changing `minLockedLp` re-grades every coin already logged.
 
 Sources: GoPlus for Base, BNB Chain, and Ethereum (batched per chain, no key needed) and Rugcheck for Solana (one call per coin). Monad and Robinhood Chain have no free scanner, so their coins are marked "not scanned." Thresholds, the launchpad dex list, and the scan window are in `SAFETY` in `src/lib/config.ts`. Each coin's detailed findings are in `safetyNotes` (hover the chain line in the latest-coins table), and the scanner's raw response is saved in `safetyRaw`.
 

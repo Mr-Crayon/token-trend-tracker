@@ -1,0 +1,231 @@
+diff --git a/README.md b/README.md
+index 4f9589c..e419e1f 100644
+--- a/README.md
++++ b/README.md
+@@ -46,7 +46,7 @@ Within 3 hours of logging a coin, the tracker checks its contract and records th
+ 
+ - **Sell risk:** honeypot, can't sell the full balance, or a sell tax of 10% or more.
+ - **Dev controls:** the creator can still mint, freeze, change taxes, blacklist or whitelist wallets, pause trading, or upgrade the contract. On EVM chains, owner-only powers are ignored when ownership is renounced.
+-- **Unlocked liquidity:** under 90% of the LP is locked or burned. Coins still on a launchpad bonding curve count as locked, since the curve program holds the liquidity.
++- **Unlocked liquidity:** under 50% of the LP is locked or burned. Coins still on a launchpad bonding curve count as locked, since the curve program holds the liquidity. On concentrated-liquidity pools (Uniswap v3/v4, PancakeSwap v3, Aerodrome Slipstream, and similar), liquidity is held as position NFTs and the scanners don't recognize NFT lockers, so lock status there counts as unknown. The liquidity flag is worked out when the dashboard loads from the stored lock share, so changing `minLockedLp` re-grades every coin already logged.
+ 
+ Sources: GoPlus for Base, BNB Chain, and Ethereum (batched per chain, no key needed) and Rugcheck for Solana (one call per coin). Monad and Robinhood Chain have no free scanner, so their coins are marked "not scanned." Thresholds, the launchpad dex list, and the scan window are in `SAFETY` in `src/lib/config.ts`. Each coin's detailed findings are in `safetyNotes` (hover the chain line in the latest-coins table), and the scanner's raw response is saved in `safetyRaw`.
+ 
+diff --git a/src/components/dashboard.tsx b/src/components/dashboard.tsx
+index 067b992..00c9d1d 100644
+--- a/src/components/dashboard.tsx
++++ b/src/components/dashboard.tsx
+@@ -1,5 +1,5 @@
+ import Link from "next/link";
+-import { networkLabel, SIM_DEFAULTS } from "@/lib/config";
++import { networkLabel, SAFETY, SIM_DEFAULTS } from "@/lib/config";
+ import { dollars, multiple, pct, relative, signedPct, toneClass } from "@/lib/format";
+ import type { Dashboard, Group, Summary } from "@/lib/stats";
+ import type { SimRules } from "@/lib/metrics";
+@@ -189,8 +189,9 @@ function SafetySection({ data }: { data: Dashboard }) {
+         Medians, except the exit-rules column, which is the simulator&apos;s average. A coin with several flags counts
+         in each of those rows. Sell risk means a honeypot, a blocked sale, or a sell tax of 10% or more. Dev controls
+         means the creator can still mint, freeze, change taxes, blacklist or whitelist wallets, pause trading, or
+-        upgrade the contract. Unlocked liquidity means under 90% of the pool&apos;s LP is locked or burned. Monad and
+-        Robinhood Chain coins aren&apos;t scanned.
++        upgrade the contract. Unlocked liquidity means under {pct(SAFETY.minLockedLp)} of the pool&apos;s LP is locked or
++        burned. On Uniswap v3/v4-style pools the scanners can&apos;t see locks, so those coins land in &ldquo;LP
++        unknown&rdquo; unless they have another flag. Monad and Robinhood Chain coins aren&apos;t scanned.
+       </p>
+     </>
+   );
+diff --git a/src/lib/config.ts b/src/lib/config.ts
+index bcefcfb..762a5dc 100644
+--- a/src/lib/config.ts
++++ b/src/lib/config.ts
+@@ -86,8 +86,16 @@ export const SIM_DEFAULTS = {
+ export const SAFETY = {
+   /** Sell tax at or above this counts as a sell risk. */
+   maxSellTax: 0.1,
+-  /** Less than this share of LP locked or burned counts as unlocked liquidity. */
+-  minLockedLp: 0.9,
++  /**
++   * Less than this share of LP locked or burned counts as unlocked liquidity.
++   * Applied when the dashboard loads, so changing it re-grades coins already logged.
++   */
++  minLockedLp: 0.5,
++  /**
++   * Concentrated-liquidity pools hold liquidity as position NFTs, and the scanners
++   * don't reliably recognize NFT lockers, so lock status there counts as unknown.
++   */
++  concentratedLiquidityDex: /v3|v4|slipstream|clmm|dlmm|whirlpool/i,
+   /** Only scan within this many hours of logging, so the result reflects what you'd have seen at entry. */
+   maxScanDelayHours: 3,
+   /**
+diff --git a/src/lib/liquidity.ts b/src/lib/liquidity.ts
+new file mode 100644
+index 0000000..27e9be4
+--- /dev/null
++++ b/src/lib/liquidity.ts
+@@ -0,0 +1,21 @@
++import { SAFETY } from "@/lib/config";
++
++export type LiquidityRead = { flag: boolean | null; note: string | null };
++
++/**
++ * Whether a pool's liquidity counts as unlocked; null means the scanners can't tell.
++ * Runs at scan time and again when the dashboard loads, so config changes apply to
++ * coins already logged.
++ */
++export function readLiquidity(dex: string | null, lpLockedPct: number | null): LiquidityRead {
++  if (dex && (SAFETY.programHeldLiquidityDexes as readonly string[]).includes(dex)) {
++    return { flag: false, note: "Liquidity held by launchpad curve" };
++  }
++  if (dex && SAFETY.concentratedLiquidityDex.test(dex)) {
++    return { flag: null, note: "LP lock unknown (concentrated-liquidity pool)" };
++  }
++  if (lpLockedPct === null) return { flag: null, note: "LP lock unknown" };
++
++  const flag = lpLockedPct < SAFETY.minLockedLp;
++  return { flag, note: flag ? `Only ${Math.round(lpLockedPct * 100)}% of LP locked or burned` : null };
++}
+diff --git a/src/lib/safety.ts b/src/lib/safety.ts
+index 4d0c003..2eb77d0 100644
+--- a/src/lib/safety.ts
++++ b/src/lib/safety.ts
+@@ -1,5 +1,6 @@
+ import { db } from "@/lib/db";
+ import { SAFETY, networkScanner } from "@/lib/config";
++import { readLiquidity } from "@/lib/liquidity";
+ 
+ /**
+  * Contract safety snapshot, taken shortly after a coin is logged.
+@@ -7,7 +8,7 @@ import { SAFETY, networkScanner } from "@/lib/config";
+  * Three red flags:
+  * - sell:      can't sell (honeypot, sell blocked, transfer restrictions) or sell tax >= SAFETY.maxSellTax
+  * - owner:     the dev keeps powers over the token: mint, freeze, change taxes, blacklist/whitelist, pause, upgrade
+- * - liquidity: less than SAFETY.minLockedLp of the LP is locked or burned
++ * - liquidity: less than SAFETY.minLockedLp of the LP is locked or burned (see readLiquidity)
+  *
+  * A flag is null when the scanner couldn't tell.
+  */
+@@ -104,28 +105,22 @@ export function assessGoPlus(t: GoPlusToken, dex: string | null): Assessment {
+   notes.push(...ownerNotes);
+   const ownerKnown = t.is_open_source !== undefined;
+ 
+-  // Is the liquidity locked?
++  // Is the liquidity locked? Store the raw share; readLiquidity decides what it means.
+   let lpLockedPct: number | null = null;
+-  let flagLiquidity: boolean | null = null;
+-  if (dex && (SAFETY.programHeldLiquidityDexes as readonly string[]).includes(dex)) {
+-    flagLiquidity = false;
+-    notes.push("Liquidity held by launchpad curve");
+-  } else if (Array.isArray(t.lp_holders) && t.lp_holders.length > 0) {
+-    lpLockedPct = t.lp_holders.reduce((sum, h) => {
++  if (Array.isArray(t.lp_holders) && t.lp_holders.length > 0) {
++    const locked = t.lp_holders.reduce((sum, h) => {
+       const burned = BURN_ADDRESSES.has(String(h.address ?? "").toLowerCase());
+       return burned || yes(h.is_locked) ? sum + (fraction(h.percent) ?? 0) : sum;
+     }, 0);
+-    lpLockedPct = Math.min(1, lpLockedPct);
+-    flagLiquidity = lpLockedPct < SAFETY.minLockedLp;
+-    if (flagLiquidity) notes.push(`Only ${Math.round(lpLockedPct * 100)}% of LP locked or burned`);
+-  } else {
+-    notes.push("LP lock unknown");
++    lpLockedPct = Math.min(1, locked);
+   }
++  const liquidity = readLiquidity(dex, lpLockedPct);
++  if (liquidity.note) notes.push(liquidity.note);
+ 
+   return {
+     flagSell: sellKnown ? sellNotes.length > 0 : null,
+     flagOwner: ownerKnown ? ownerNotes.length > 0 : null,
+-    flagLiquidity,
++    flagLiquidity: liquidity.flag,
+     sellTax,
+     lpLockedPct,
+     notes,
+@@ -151,23 +146,17 @@ export function assessRugcheck(summary: RugcheckSummary, dex: string | null): As
+   const ownerNotes = risks.filter((r) => SOLANA_OWNER_RISK.test(r));
+   const notes = [...sellNotes, ...ownerNotes];
+ 
+-  let lpLockedPct: number | null = null;
+-  let flagLiquidity: boolean | null = null;
+-  if (dex && (SAFETY.programHeldLiquidityDexes as readonly string[]).includes(dex)) {
+-    flagLiquidity = false;
+-    notes.push("Liquidity held by launchpad curve");
+-  } else if (typeof summary.lpLockedPct === "number" && Number.isFinite(summary.lpLockedPct)) {
+-    lpLockedPct = Math.min(1, Math.max(0, summary.lpLockedPct / 100));
+-    flagLiquidity = lpLockedPct < SAFETY.minLockedLp;
+-    if (flagLiquidity) notes.push(`Only ${Math.round(lpLockedPct * 100)}% of LP locked or burned`);
+-  } else {
+-    notes.push("LP lock unknown");
+-  }
++  const lpLockedPct =
++    typeof summary.lpLockedPct === "number" && Number.isFinite(summary.lpLockedPct)
++      ? Math.min(1, Math.max(0, summary.lpLockedPct / 100))
++      : null;
++  const liquidity = readLiquidity(dex, lpLockedPct);
++  if (liquidity.note) notes.push(liquidity.note);
+ 
+   return {
+     flagSell: sellNotes.length > 0,
+     flagOwner: ownerNotes.length > 0,
+-    flagLiquidity,
++    flagLiquidity: liquidity.flag,
+     sellTax: null,
+     lpLockedPct,
+     notes,
+diff --git a/src/lib/stats.ts b/src/lib/stats.ts
+index be6afa2..16763e6 100644
+--- a/src/lib/stats.ts
++++ b/src/lib/stats.ts
+@@ -1,6 +1,7 @@
+ import { db } from "@/lib/db";
+ import { NETWORKS, RUN_UP_BUCKETS, SIM_DEFAULTS, TRACKING } from "@/lib/config";
+ import { simulate, type SimRules } from "@/lib/metrics";
++import { readLiquidity } from "@/lib/liquidity";
+ 
+ export type Summary = {
+   n: number;
+@@ -47,7 +48,7 @@ export function parseRules(params: Record<string, string | string[] | undefined>
+ }
+ 
+ export async function loadDashboard(rules: SimRules) {
+-  const tokens = await db().token.findMany({
++  const rows = await db().token.findMany({
+     orderBy: { entryAt: "desc" },
+     select: {
+       id: true,
+@@ -70,9 +71,17 @@ export async function loadDashboard(rules: SimRules) {
+       flagLiquidity: true,
+       safetyNotes: true,
+       entryChange24h: true,
++      dex: true,
++      lpLockedPct: true,
+     },
+   });
+ 
++  // Re-grade liquidity from the stored lock share, so config changes apply to coins already logged.
++  const tokens = rows.map((t) => ({
++    ...t,
++    flagLiquidity: t.safetyStatus === "SCANNED" ? readLiquidity(t.dex, t.lpLockedPct).flag : null,
++  }));
++
+   const done = tokens.filter((t) => t.status === "DONE");
+   const doneCloses = done.length
+     ? await db().token.findMany({ where: { status: "DONE" }, select: { id: true, entryPrice: true, closes: true } })
+@@ -111,7 +120,8 @@ export async function loadDashboard(rules: SimRules) {
+   });
+ 
+   const safetyGroups = [
+-    group("clean", "No red flags", scanned.filter((t) => !t.flagSell && !t.flagOwner && !t.flagLiquidity)),
++    group("clean", "No red flags", scanned.filter((t) => !t.flagSell && !t.flagOwner && t.flagLiquidity === false)),
++    group("lpUnknown", "No flags, LP unknown", scanned.filter((t) => !t.flagSell && !t.flagOwner && t.flagLiquidity === null)),
+     group("sell", "Sell risk", scanned.filter((t) => t.flagSell)),
+     group("owner", "Dev controls", scanned.filter((t) => t.flagOwner)),
+     group("liquidity", "Unlocked liquidity", scanned.filter((t) => t.flagLiquidity)),
+@@ -127,7 +137,7 @@ export async function loadDashboard(rules: SimRules) {
+   ];
+ 
+   // Head-to-head at the longest horizon where both sides have at least 10 coins.
+-  const clean = scanned.filter((t) => !t.flagSell && !t.flagOwner && !t.flagLiquidity);
++  const clean = scanned.filter((t) => !t.flagSell && !t.flagOwner && t.flagLiquidity === false);
+   const flagged = scanned.filter((t) => t.flagSell || t.flagOwner || t.flagLiquidity);
+   const horizons = [
+     ["a week", "ret7d"],

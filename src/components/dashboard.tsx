@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { networkLabel, SIM_DEFAULTS } from "@/lib/config";
+import { networkLabel, SAFETY, SIM_DEFAULTS } from "@/lib/config";
 import { dollars, multiple, pct, relative, signedPct, toneClass } from "@/lib/format";
 import type { Dashboard, Group, Summary } from "@/lib/stats";
 import type { SimRules } from "@/lib/metrics";
@@ -189,8 +189,9 @@ function SafetySection({ data }: { data: Dashboard }) {
         Medians, except the exit-rules column, which is the simulator&apos;s average. A coin with several flags counts
         in each of those rows. Sell risk means a honeypot, a blocked sale, or a sell tax of 10% or more. Dev controls
         means the creator can still mint, freeze, change taxes, blacklist or whitelist wallets, pause trading, or
-        upgrade the contract. Unlocked liquidity means under 90% of the pool&apos;s LP is locked or burned. Monad and
-        Robinhood Chain coins aren&apos;t scanned.
+        upgrade the contract. Unlocked liquidity means under {pct(SAFETY.minLockedLp)} of the pool&apos;s LP is locked or
+        burned. On Uniswap v3/v4-style pools the scanners can&apos;t see locks, so those coins land in &ldquo;LP
+        unknown&rdquo; unless they have another flag. Monad and Robinhood Chain coins aren&apos;t scanned.
       </p>
     </>
   );

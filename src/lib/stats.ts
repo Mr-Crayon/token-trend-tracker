@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { NETWORKS, RUN_UP_BUCKETS, SIM_DEFAULTS, TRACKING } from "@/lib/config";
 import { simulate, type SimRules } from "@/lib/metrics";
+import { readLiquidity } from "@/lib/liquidity";
 
 export type Summary = {
   n: number;
@@ -47,7 +48,7 @@ export function parseRules(params: Record<string, string | string[] | undefined>
 }
 
 export async function loadDashboard(rules: SimRules) {
-  const tokens = await db().token.findMany({
+  const rows = await db().token.findMany({
     orderBy: { entryAt: "desc" },
     select: {
       id: true,
@@ -70,8 +71,16 @@ export async function loadDashboard(rules: SimRules) {
       flagLiquidity: true,
       safetyNotes: true,
       entryChange24h: true,
+      dex: true,
+      lpLockedPct: true,
     },
   });
+
+  // Re-grade liquidity from the stored lock share, so config changes apply to coins already logged.
+  const tokens = rows.map((t) => ({
+    ...t,
+    flagLiquidity: t.safetyStatus === "SCANNED" ? readLiquidity(t.dex, t.lpLockedPct).flag : null,
+  }));
 
   const done = tokens.filter((t) => t.status === "DONE");
   const doneCloses = done.length
@@ -111,7 +120,8 @@ export async function loadDashboard(rules: SimRules) {
   });
 
   const safetyGroups = [
-    group("clean", "No red flags", scanned.filter((t) => !t.flagSell && !t.flagOwner && !t.flagLiquidity)),
+    group("clean", "No red flags", scanned.filter((t) => !t.flagSell && !t.flagOwner && t.flagLiquidity === false)),
+    group("lpUnknown", "No flags, LP unknown", scanned.filter((t) => !t.flagSell && !t.flagOwner && t.flagLiquidity === null)),
     group("sell", "Sell risk", scanned.filter((t) => t.flagSell)),
     group("owner", "Dev controls", scanned.filter((t) => t.flagOwner)),
     group("liquidity", "Unlocked liquidity", scanned.filter((t) => t.flagLiquidity)),
@@ -127,7 +137,7 @@ export async function loadDashboard(rules: SimRules) {
   ];
 
   // Head-to-head at the longest horizon where both sides have at least 10 coins.
-  const clean = scanned.filter((t) => !t.flagSell && !t.flagOwner && !t.flagLiquidity);
+  const clean = scanned.filter((t) => !t.flagSell && !t.flagOwner && t.flagLiquidity === false);
   const flagged = scanned.filter((t) => t.flagSell || t.flagOwner || t.flagLiquidity);
   const horizons = [
     ["a week", "ret7d"],
