@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { networkLabel, SIM_DEFAULTS } from "@/lib/config";
 import { dollars, multiple, pct, relative, signedPct, toneClass } from "@/lib/format";
-import type { Dashboard, Summary } from "@/lib/stats";
+import type { Dashboard, Group, Summary } from "@/lib/stats";
 import type { SimRules } from "@/lib/metrics";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,6 +25,10 @@ export function DashboardView({ data, rules }: { data: Dashboard; rules: SimRule
 
           <Section title="Did the safety checks matter?">
             <SafetySection data={data} />
+          </Section>
+
+          <Section title="Did the run-up before trending matter?">
+            <RunUpSection data={data} />
           </Section>
 
           <Section title="Test your exit rules">
@@ -176,45 +180,72 @@ function SafetySection({ data }: { data: Dashboard }) {
           coins).
         </p>
       )}
-      <Table className="tabular-nums">
-        <TableCaption className="sr-only">Median returns grouped by contract safety flags at entry</TableCaption>
-        <TableHeader>
-          <TableRow>
-            <TableHead>At entry</TableHead>
-            <TableHead className="text-right">Coins</TableHead>
-            <TableHead className="text-right">1d</TableHead>
-            <TableHead className="text-right">3d</TableHead>
-            <TableHead className="text-right">7d</TableHead>
-            <TableHead className="text-right">Exit rules</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {data.safetyGroups.map((g) => (
-            <TableRow key={g.key}>
-              <TableCell>{g.label}</TableCell>
-              <TableCell className="text-right">{g.n}</TableCell>
-              <TableCell className="text-right">
-                <Ret value={g.median1d} />
-              </TableCell>
-              <TableCell className="text-right">
-                <Ret value={g.median3d} />
-              </TableCell>
-              <TableCell className="text-right">
-                <Ret value={g.median7d} />
-              </TableCell>
-              <TableCell className="text-right">
-                <Ret value={g.simMean} />
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <GroupTable
+        groups={data.safetyGroups}
+        firstHeader="At entry"
+        caption="Median returns grouped by contract safety flags at entry"
+      />
       <p className="text-muted-foreground mt-4 max-w-[65ch] text-sm leading-relaxed">
         Medians, except the exit-rules column, which is the simulator&apos;s average. A coin with several flags counts
         in each of those rows. Sell risk means a honeypot, a blocked sale, or a sell tax of 10% or more. Dev controls
         means the creator can still mint, freeze, change taxes, blacklist or whitelist wallets, pause trading, or
         upgrade the contract. Unlocked liquidity means under 90% of the pool&apos;s LP is locked or burned. Monad and
         Robinhood Chain coins aren&apos;t scanned.
+      </p>
+    </>
+  );
+}
+
+function GroupTable({ groups, firstHeader, caption }: { groups: Group[]; firstHeader: string; caption: string }) {
+  return (
+    <Table className="tabular-nums">
+      <TableCaption className="sr-only">{caption}</TableCaption>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{firstHeader}</TableHead>
+          <TableHead className="text-right">Coins</TableHead>
+          <TableHead className="text-right">1d</TableHead>
+          <TableHead className="text-right">3d</TableHead>
+          <TableHead className="text-right">7d</TableHead>
+          <TableHead className="text-right">Exit rules</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {groups.map((g) => (
+          <TableRow key={g.key}>
+            <TableCell>{g.label}</TableCell>
+            <TableCell className="text-right">{g.n}</TableCell>
+            <TableCell className="text-right">
+              <Ret value={g.median1d} />
+            </TableCell>
+            <TableCell className="text-right">
+              <Ret value={g.median3d} />
+            </TableCell>
+            <TableCell className="text-right">
+              <Ret value={g.median7d} />
+            </TableCell>
+            <TableCell className="text-right">
+              <Ret value={g.simMean} />
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+function RunUpSection({ data }: { data: Dashboard }) {
+  const groups = data.runUpGroups.filter((g) => g.key !== "unknown" || g.n > 0);
+  return (
+    <>
+      <p className="mb-4 max-w-[65ch] leading-relaxed">
+        Grouped by how much each coin&apos;s price had already risen in the 24 hours before it was logged. If the
+        later rows do worse, trending coins that already ran hard are where early buyers sell.
+      </p>
+      <GroupTable groups={groups} firstHeader="Already up" caption="Median returns grouped by price run-up before entry" />
+      <p className="text-muted-foreground mt-4 max-w-[65ch] text-sm leading-relaxed">
+        Medians, except the exit-rules column, which is the simulator&apos;s average. For coins under a day old, the
+        run-up is measured from launch. Coins logged before this was tracked show as not recorded.
       </p>
     </>
   );
@@ -359,7 +390,12 @@ function RecentTable({ data }: { data: Dashboard }) {
                 {flagLabels(t).length > 0 && <span className="text-down">, {flagLabels(t).join(", ")}</span>}
               </span>
             </TableCell>
-            <TableCell className="text-muted-foreground">{relative(t.entryAt)}</TableCell>
+            <TableCell className="text-muted-foreground">
+              <span className="block">{relative(t.entryAt)}</span>
+              {t.entryChange24h !== null && (
+                <span className="block text-xs">{signedPct(t.entryChange24h)} before</span>
+              )}
+            </TableCell>
             {t.status === "FAILED" ? (
               <TableCell colSpan={4} className="text-muted-foreground text-right">
                 No price data

@@ -36,6 +36,10 @@ API budget at the defaults: about 6 calls per run to check trending lists, plus 
 - **The exit-rule simulator** buys every finished coin at entry, sells part at your target, and sells the rest when a close falls your trailing percentage below the best close so far. It charges 0.5% per side (fomo's spot fee) and assumes no slippage, so real results during a dump would be worse.
 - **Failed coins** (five straight fetch errors) are left out of the stats and counted in the footer. Many are probably dead, so a large number there means the results look better than they were.
 
+## Run-up before entry
+
+Trending lists rank coins by recent activity, so part of each coin's rise has already happened by the time it's logged. The tracker stores each coin's price change over the 6 and 24 hours before it was logged (from the same trending response, so no extra API calls). The dashboard groups results by the 24-hour figure: under +50%, +50% to +200%, and over +200%. Bucket edges are `RUN_UP_BUCKETS` in `src/lib/config.ts`. For coins under a day old, GeckoTerminal measures the change from launch.
+
 ## Safety snapshot
 
 Within 3 hours of logging a coin, the tracker checks its contract and records three red flags. It records them without filtering anything out, so the dashboard can compare flagged coins against clean ones.

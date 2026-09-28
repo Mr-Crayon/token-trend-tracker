@@ -50,6 +50,11 @@ function num(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function pctToFraction(value: unknown): number | null {
+  const n = num(value);
+  return n === null ? null : n / 100;
+}
+
 // ---------- Trending pools ----------
 
 export type TrendingPool = {
@@ -63,6 +68,9 @@ export type TrendingPool = {
   fdvUsd: number | null;
   liquidityUsd: number | null;
   volume24hUsd: number | null;
+  /** Price change over the prior 6h / 24h as a fraction (1.5 = +150%). Covers since-launch for younger pools. */
+  change6h: number | null;
+  change24h: number | null;
   poolCreatedAt: Date | null;
 };
 
@@ -76,6 +84,7 @@ type TrendingResponse = {
       fdv_usd?: string | null;
       reserve_in_usd?: string | null;
       volume_usd?: { h24?: string | null };
+      price_change_percentage?: { h6?: string | null; h24?: string | null };
       pool_created_at?: string | null;
     };
     relationships?: { base_token?: JsonApiRef; dex?: JsonApiRef };
@@ -117,6 +126,8 @@ export async function trendingPools(network: string): Promise<TrendingPool[]> {
       fdvUsd: num(a.fdv_usd),
       liquidityUsd: num(a.reserve_in_usd),
       volume24hUsd: num(a.volume_usd?.h24),
+      change6h: pctToFraction(a.price_change_percentage?.h6),
+      change24h: pctToFraction(a.price_change_percentage?.h24),
       poolCreatedAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : null,
     });
   });

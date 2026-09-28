@@ -63,6 +63,16 @@ export const API = {
   runBudgetMs: 50_000,
 } as const;
 
+/**
+ * Buckets for how far a coin had already run in the 24h before it was logged.
+ * Upper bounds as fractions: 0.5 = +50%, 2 = +200%.
+ */
+export const RUN_UP_BUCKETS = [
+  { key: "early", label: "Under +50%", max: 0.5 },
+  { key: "mid", label: "+50% to +200%", max: 2 },
+  { key: "late", label: "Over +200%", max: Infinity },
+] as const;
+
 /** Default exit rules for the simulator. Override with ?tp=&sell=&trail= on the dashboard. */
 export const SIM_DEFAULTS = {
   takeProfitMultiple: 2,

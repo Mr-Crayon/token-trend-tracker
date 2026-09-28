@@ -36,6 +36,9 @@ model Token {
   entryFdv       Float?
   entryLiquidity Float?
   entryVolume24h Float?
+  /// Price change in the 6h / 24h before logging (fraction; since launch for younger pools).
+  entryChange6h  Float?
+  entryChange24h Float?
 
   status       TokenStatus @default(TRACKING)
   nextCheckAt  DateTime

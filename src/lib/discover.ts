@@ -85,6 +85,8 @@ export async function discover(deadline: number): Promise<DiscoveryResult> {
         entryFdv: p.fdvUsd,
         entryLiquidity: p.liquidityUsd,
         entryVolume24h: p.volume24hUsd,
+        entryChange6h: p.change6h,
+        entryChange24h: p.change24h,
         nextCheckAt: checkpointDueAt(now, TRACKING.checkpointsHours[0], TRACKING.settleMinutes),
         ...(networkScanner(p.network)
           ? {}

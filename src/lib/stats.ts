@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { NETWORKS, SIM_DEFAULTS, TRACKING } from "@/lib/config";
+import { NETWORKS, RUN_UP_BUCKETS, SIM_DEFAULTS, TRACKING } from "@/lib/config";
 import { simulate, type SimRules } from "@/lib/metrics";
 
 export type Summary = {
@@ -69,6 +69,7 @@ export async function loadDashboard(rules: SimRules) {
       flagOwner: true,
       flagLiquidity: true,
       safetyNotes: true,
+      entryChange24h: true,
     },
   });
 
@@ -99,15 +100,7 @@ export async function loadDashboard(rules: SimRules) {
 
   // Flags overlap: a coin with two red flags appears in both rows.
   const scanned = tokens.filter((t) => t.safetyStatus === "SCANNED");
-  const safetyGroups = (
-    [
-      ["clean", "No red flags", scanned.filter((t) => !t.flagSell && !t.flagOwner && !t.flagLiquidity)],
-      ["sell", "Sell risk", scanned.filter((t) => t.flagSell)],
-      ["owner", "Dev controls", scanned.filter((t) => t.flagOwner)],
-      ["liquidity", "Unlocked liquidity", scanned.filter((t) => t.flagLiquidity)],
-      ["unscanned", "Not scanned", tokens.filter((t) => t.safetyStatus === "UNSCANNED")],
-    ] as const
-  ).map(([key, label, list]) => ({
+  const group = (key: string, label: string, list: typeof tokens): Group => ({
     key,
     label,
     n: list.length,
@@ -115,7 +108,23 @@ export async function loadDashboard(rules: SimRules) {
     median3d: median(vals(list, "ret3d")),
     median7d: median(vals(list, "ret7d")),
     simMean: simMeanOf(list),
-  }));
+  });
+
+  const safetyGroups = [
+    group("clean", "No red flags", scanned.filter((t) => !t.flagSell && !t.flagOwner && !t.flagLiquidity)),
+    group("sell", "Sell risk", scanned.filter((t) => t.flagSell)),
+    group("owner", "Dev controls", scanned.filter((t) => t.flagOwner)),
+    group("liquidity", "Unlocked liquidity", scanned.filter((t) => t.flagLiquidity)),
+    group("unscanned", "Not scanned", tokens.filter((t) => t.safetyStatus === "UNSCANNED")),
+  ];
+
+  // How far each coin had already run in the 24h before it was logged.
+  const bucketOf = (change: number | null) =>
+    change === null ? "unknown" : RUN_UP_BUCKETS.find((b) => change < b.max)?.key ?? "unknown";
+  const runUpGroups = [
+    ...RUN_UP_BUCKETS.map((b) => group(b.key, b.label, tokens.filter((t) => bucketOf(t.entryChange24h) === b.key))),
+    group("unknown", "Not recorded", tokens.filter((t) => t.entryChange24h === null)),
+  ];
 
   // Head-to-head at the longest horizon where both sides have at least 10 coins.
   const clean = scanned.filter((t) => !t.flagSell && !t.flagOwner && !t.flagLiquidity);
@@ -178,8 +187,19 @@ export async function loadDashboard(rules: SimRules) {
     byChain,
     safetyGroups,
     safetyCompare,
+    runUpGroups,
     recent: tokens.slice(0, 40),
   };
 }
+
+export type Group = {
+  key: string;
+  label: string;
+  n: number;
+  median1d: number | null;
+  median3d: number | null;
+  median7d: number | null;
+  simMean: number | null;
+};
 
 export type Dashboard = Awaited<ReturnType<typeof loadDashboard>>;

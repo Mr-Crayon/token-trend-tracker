@@ -1,0 +1,332 @@
+diff --git a/README.md b/README.md
+index 14572e9..4f9589c 100644
+--- a/README.md
++++ b/README.md
+@@ -36,6 +36,10 @@ API budget at the defaults: about 6 calls per run to check trending lists, plus
+ - **The exit-rule simulator** buys every finished coin at entry, sells part at your target, and sells the rest when a close falls your trailing percentage below the best close so far. It charges 0.5% per side (fomo's spot fee) and assumes no slippage, so real results during a dump would be worse.
+ - **Failed coins** (five straight fetch errors) are left out of the stats and counted in the footer. Many are probably dead, so a large number there means the results look better than they were.
+ 
++## Run-up before entry
++
++Trending lists rank coins by recent activity, so part of each coin's rise has already happened by the time it's logged. The tracker stores each coin's price change over the 6 and 24 hours before it was logged (from the same trending response, so no extra API calls). The dashboard groups results by the 24-hour figure: under +50%, +50% to +200%, and over +200%. Bucket edges are `RUN_UP_BUCKETS` in `src/lib/config.ts`. For coins under a day old, GeckoTerminal measures the change from launch.
++
+ ## Safety snapshot
+ 
+ Within 3 hours of logging a coin, the tracker checks its contract and records three red flags. It records them without filtering anything out, so the dashboard can compare flagged coins against clean ones.
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index ad69519..7ad3675 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -36,6 +36,9 @@ model Token {
+   entryFdv       Float?
+   entryLiquidity Float?
+   entryVolume24h Float?
++  /// Price change in the 6h / 24h before logging (fraction; since launch for younger pools).
++  entryChange6h  Float?
++  entryChange24h Float?
+ 
+   status       TokenStatus @default(TRACKING)
+   nextCheckAt  DateTime
+diff --git a/src/components/dashboard.tsx b/src/components/dashboard.tsx
+index 47f75f4..067b992 100644
+--- a/src/components/dashboard.tsx
++++ b/src/components/dashboard.tsx
+@@ -1,7 +1,7 @@
+ import Link from "next/link";
+ import { networkLabel, SIM_DEFAULTS } from "@/lib/config";
+ import { dollars, multiple, pct, relative, signedPct, toneClass } from "@/lib/format";
+-import type { Dashboard, Summary } from "@/lib/stats";
++import type { Dashboard, Group, Summary } from "@/lib/stats";
+ import type { SimRules } from "@/lib/metrics";
+ import { Button } from "@/components/ui/button";
+ import { Card, CardContent } from "@/components/ui/card";
+@@ -27,6 +27,10 @@ export function DashboardView({ data, rules }: { data: Dashboard; rules: SimRule
+             <SafetySection data={data} />
+           </Section>
+ 
++          <Section title="Did the run-up before trending matter?">
++            <RunUpSection data={data} />
++          </Section>
++
+           <Section title="Test your exit rules">
+             <Simulator data={data} rules={rules} />
+           </Section>
+@@ -176,39 +180,11 @@ function SafetySection({ data }: { data: Dashboard }) {
+           coins).
+         </p>
+       )}
+-      <Table className="tabular-nums">
+-        <TableCaption className="sr-only">Median returns grouped by contract safety flags at entry</TableCaption>
+-        <TableHeader>
+-          <TableRow>
+-            <TableHead>At entry</TableHead>
+-            <TableHead className="text-right">Coins</TableHead>
+-            <TableHead className="text-right">1d</TableHead>
+-            <TableHead className="text-right">3d</TableHead>
+-            <TableHead className="text-right">7d</TableHead>
+-            <TableHead className="text-right">Exit rules</TableHead>
+-          </TableRow>
+-        </TableHeader>
+-        <TableBody>
+-          {data.safetyGroups.map((g) => (
+-            <TableRow key={g.key}>
+-              <TableCell>{g.label}</TableCell>
+-              <TableCell className="text-right">{g.n}</TableCell>
+-              <TableCell className="text-right">
+-                <Ret value={g.median1d} />
+-              </TableCell>
+-              <TableCell className="text-right">
+-                <Ret value={g.median3d} />
+-              </TableCell>
+-              <TableCell className="text-right">
+-                <Ret value={g.median7d} />
+-              </TableCell>
+-              <TableCell className="text-right">
+-                <Ret value={g.simMean} />
+-              </TableCell>
+-            </TableRow>
+-          ))}
+-        </TableBody>
+-      </Table>
++      <GroupTable
++        groups={data.safetyGroups}
++        firstHeader="At entry"
++        caption="Median returns grouped by contract safety flags at entry"
++      />
+       <p className="text-muted-foreground mt-4 max-w-[65ch] text-sm leading-relaxed">
+         Medians, except the exit-rules column, which is the simulator&apos;s average. A coin with several flags counts
+         in each of those rows. Sell risk means a honeypot, a blocked sale, or a sell tax of 10% or more. Dev controls
+@@ -220,6 +196,61 @@ function SafetySection({ data }: { data: Dashboard }) {
+   );
+ }
+ 
++function GroupTable({ groups, firstHeader, caption }: { groups: Group[]; firstHeader: string; caption: string }) {
++  return (
++    <Table className="tabular-nums">
++      <TableCaption className="sr-only">{caption}</TableCaption>
++      <TableHeader>
++        <TableRow>
++          <TableHead>{firstHeader}</TableHead>
++          <TableHead className="text-right">Coins</TableHead>
++          <TableHead className="text-right">1d</TableHead>
++          <TableHead className="text-right">3d</TableHead>
++          <TableHead className="text-right">7d</TableHead>
++          <TableHead className="text-right">Exit rules</TableHead>
++        </TableRow>
++      </TableHeader>
++      <TableBody>
++        {groups.map((g) => (
++          <TableRow key={g.key}>
++            <TableCell>{g.label}</TableCell>
++            <TableCell className="text-right">{g.n}</TableCell>
++            <TableCell className="text-right">
++              <Ret value={g.median1d} />
++            </TableCell>
++            <TableCell className="text-right">
++              <Ret value={g.median3d} />
++            </TableCell>
++            <TableCell className="text-right">
++              <Ret value={g.median7d} />
++            </TableCell>
++            <TableCell className="text-right">
++              <Ret value={g.simMean} />
++            </TableCell>
++          </TableRow>
++        ))}
++      </TableBody>
++    </Table>
++  );
++}
++
++function RunUpSection({ data }: { data: Dashboard }) {
++  const groups = data.runUpGroups.filter((g) => g.key !== "unknown" || g.n > 0);
++  return (
++    <>
++      <p className="mb-4 max-w-[65ch] leading-relaxed">
++        Grouped by how much each coin&apos;s price had already risen in the 24 hours before it was logged. If the
++        later rows do worse, trending coins that already ran hard are where early buyers sell.
++      </p>
++      <GroupTable groups={groups} firstHeader="Already up" caption="Median returns grouped by price run-up before entry" />
++      <p className="text-muted-foreground mt-4 max-w-[65ch] text-sm leading-relaxed">
++        Medians, except the exit-rules column, which is the simulator&apos;s average. For coins under a day old, the
++        run-up is measured from launch. Coins logged before this was tracked show as not recorded.
++      </p>
++    </>
++  );
++}
++
+ function flagLabels(t: Dashboard["recent"][number]): string[] {
+   if (t.safetyStatus !== "SCANNED") return [];
+   return [
+@@ -359,7 +390,12 @@ function RecentTable({ data }: { data: Dashboard }) {
+                 {flagLabels(t).length > 0 && <span className="text-down">, {flagLabels(t).join(", ")}</span>}
+               </span>
+             </TableCell>
+-            <TableCell className="text-muted-foreground">{relative(t.entryAt)}</TableCell>
++            <TableCell className="text-muted-foreground">
++              <span className="block">{relative(t.entryAt)}</span>
++              {t.entryChange24h !== null && (
++                <span className="block text-xs">{signedPct(t.entryChange24h)} before</span>
++              )}
++            </TableCell>
+             {t.status === "FAILED" ? (
+               <TableCell colSpan={4} className="text-muted-foreground text-right">
+                 No price data
+diff --git a/src/lib/config.ts b/src/lib/config.ts
+index 02ef19b..bcefcfb 100644
+--- a/src/lib/config.ts
++++ b/src/lib/config.ts
+@@ -63,6 +63,16 @@ export const API = {
+   runBudgetMs: 50_000,
+ } as const;
+ 
++/**
++ * Buckets for how far a coin had already run in the 24h before it was logged.
++ * Upper bounds as fractions: 0.5 = +50%, 2 = +200%.
++ */
++export const RUN_UP_BUCKETS = [
++  { key: "early", label: "Under +50%", max: 0.5 },
++  { key: "mid", label: "+50% to +200%", max: 2 },
++  { key: "late", label: "Over +200%", max: Infinity },
++] as const;
++
+ /** Default exit rules for the simulator. Override with ?tp=&sell=&trail= on the dashboard. */
+ export const SIM_DEFAULTS = {
+   takeProfitMultiple: 2,
+diff --git a/src/lib/discover.ts b/src/lib/discover.ts
+index f4627a2..8acb5b2 100644
+--- a/src/lib/discover.ts
++++ b/src/lib/discover.ts
+@@ -85,6 +85,8 @@ export async function discover(deadline: number): Promise<DiscoveryResult> {
+         entryFdv: p.fdvUsd,
+         entryLiquidity: p.liquidityUsd,
+         entryVolume24h: p.volume24hUsd,
++        entryChange6h: p.change6h,
++        entryChange24h: p.change24h,
+         nextCheckAt: checkpointDueAt(now, TRACKING.checkpointsHours[0], TRACKING.settleMinutes),
+         ...(networkScanner(p.network)
+           ? {}
+diff --git a/src/lib/gecko.ts b/src/lib/gecko.ts
+index 2f8850f..a7af988 100644
+--- a/src/lib/gecko.ts
++++ b/src/lib/gecko.ts
+@@ -50,6 +50,11 @@ function num(value: unknown): number | null {
+   return Number.isFinite(n) ? n : null;
+ }
+ 
++function pctToFraction(value: unknown): number | null {
++  const n = num(value);
++  return n === null ? null : n / 100;
++}
++
+ // ---------- Trending pools ----------
+ 
+ export type TrendingPool = {
+@@ -63,6 +68,9 @@ export type TrendingPool = {
+   fdvUsd: number | null;
+   liquidityUsd: number | null;
+   volume24hUsd: number | null;
++  /** Price change over the prior 6h / 24h as a fraction (1.5 = +150%). Covers since-launch for younger pools. */
++  change6h: number | null;
++  change24h: number | null;
+   poolCreatedAt: Date | null;
+ };
+ 
+@@ -76,6 +84,7 @@ type TrendingResponse = {
+       fdv_usd?: string | null;
+       reserve_in_usd?: string | null;
+       volume_usd?: { h24?: string | null };
++      price_change_percentage?: { h6?: string | null; h24?: string | null };
+       pool_created_at?: string | null;
+     };
+     relationships?: { base_token?: JsonApiRef; dex?: JsonApiRef };
+@@ -117,6 +126,8 @@ export async function trendingPools(network: string): Promise<TrendingPool[]> {
+       fdvUsd: num(a.fdv_usd),
+       liquidityUsd: num(a.reserve_in_usd),
+       volume24hUsd: num(a.volume_usd?.h24),
++      change6h: pctToFraction(a.price_change_percentage?.h6),
++      change24h: pctToFraction(a.price_change_percentage?.h24),
+       poolCreatedAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : null,
+     });
+   });
+diff --git a/src/lib/stats.ts b/src/lib/stats.ts
+index ef4ae32..be6afa2 100644
+--- a/src/lib/stats.ts
++++ b/src/lib/stats.ts
+@@ -1,5 +1,5 @@
+ import { db } from "@/lib/db";
+-import { NETWORKS, SIM_DEFAULTS, TRACKING } from "@/lib/config";
++import { NETWORKS, RUN_UP_BUCKETS, SIM_DEFAULTS, TRACKING } from "@/lib/config";
+ import { simulate, type SimRules } from "@/lib/metrics";
+ 
+ export type Summary = {
+@@ -69,6 +69,7 @@ export async function loadDashboard(rules: SimRules) {
+       flagOwner: true,
+       flagLiquidity: true,
+       safetyNotes: true,
++      entryChange24h: true,
+     },
+   });
+ 
+@@ -99,15 +100,7 @@ export async function loadDashboard(rules: SimRules) {
+ 
+   // Flags overlap: a coin with two red flags appears in both rows.
+   const scanned = tokens.filter((t) => t.safetyStatus === "SCANNED");
+-  const safetyGroups = (
+-    [
+-      ["clean", "No red flags", scanned.filter((t) => !t.flagSell && !t.flagOwner && !t.flagLiquidity)],
+-      ["sell", "Sell risk", scanned.filter((t) => t.flagSell)],
+-      ["owner", "Dev controls", scanned.filter((t) => t.flagOwner)],
+-      ["liquidity", "Unlocked liquidity", scanned.filter((t) => t.flagLiquidity)],
+-      ["unscanned", "Not scanned", tokens.filter((t) => t.safetyStatus === "UNSCANNED")],
+-    ] as const
+-  ).map(([key, label, list]) => ({
++  const group = (key: string, label: string, list: typeof tokens): Group => ({
+     key,
+     label,
+     n: list.length,
+@@ -115,7 +108,23 @@ export async function loadDashboard(rules: SimRules) {
+     median3d: median(vals(list, "ret3d")),
+     median7d: median(vals(list, "ret7d")),
+     simMean: simMeanOf(list),
+-  }));
++  });
++
++  const safetyGroups = [
++    group("clean", "No red flags", scanned.filter((t) => !t.flagSell && !t.flagOwner && !t.flagLiquidity)),
++    group("sell", "Sell risk", scanned.filter((t) => t.flagSell)),
++    group("owner", "Dev controls", scanned.filter((t) => t.flagOwner)),
++    group("liquidity", "Unlocked liquidity", scanned.filter((t) => t.flagLiquidity)),
++    group("unscanned", "Not scanned", tokens.filter((t) => t.safetyStatus === "UNSCANNED")),
++  ];
++
++  // How far each coin had already run in the 24h before it was logged.
++  const bucketOf = (change: number | null) =>
++    change === null ? "unknown" : RUN_UP_BUCKETS.find((b) => change < b.max)?.key ?? "unknown";
++  const runUpGroups = [
++    ...RUN_UP_BUCKETS.map((b) => group(b.key, b.label, tokens.filter((t) => bucketOf(t.entryChange24h) === b.key))),
++    group("unknown", "Not recorded", tokens.filter((t) => t.entryChange24h === null)),
++  ];
+ 
+   // Head-to-head at the longest horizon where both sides have at least 10 coins.
+   const clean = scanned.filter((t) => !t.flagSell && !t.flagOwner && !t.flagLiquidity);
+@@ -178,8 +187,19 @@ export async function loadDashboard(rules: SimRules) {
+     byChain,
+     safetyGroups,
+     safetyCompare,
++    runUpGroups,
+     recent: tokens.slice(0, 40),
+   };
+ }
+ 
++export type Group = {
++  key: string;
++  label: string;
++  n: number;
++  median1d: number | null;
++  median3d: number | null;
++  median7d: number | null;
++  simMean: number | null;
++};
++
+ export type Dashboard = Awaited<ReturnType<typeof loadDashboard>>;
